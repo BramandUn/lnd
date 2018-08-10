@@ -1,0 +1,555 @@
+diff --git a/chainparams.go b/chainparams.go
+index 812bb6f..ced2af3 100644
+--- a/chainparams.go
++++ b/chainparams.go
+@@ -6,6 +6,7 @@ import (
+ 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+ 	bitcoinWire "github.com/btcsuite/btcd/wire"
+ 	"github.com/lightningnetwork/lnd/keychain"
++	xsncoinCfg "github.com/btcsuite/btcd/chaincfg"
+ 	litecoinCfg "github.com/ltcsuite/ltcd/chaincfg"
+ 	litecoinWire "github.com/ltcsuite/ltcd/wire"
+ )
+@@ -30,6 +31,12 @@ type litecoinNetParams struct {
+ 	CoinType uint32
+ }
+ 
++type xsncoinNetParams struct {
++	*xsncoinCfg.Params
++	rpcPort  string
++	CoinType uint32
++}
++
+ // bitcoinTestNetParams contains parameters specific to the 3rd version of the
+ // test network.
+ var bitcoinTestNetParams = bitcoinNetParams{
+@@ -77,6 +84,29 @@ var regTestNetParams = bitcoinNetParams{
+ 	CoinType: keychain.CoinTypeTestnet,
+ }
+ 
++// xsnTestNetParams contains parameters specific to the 3rd version of the
++// test network.
++var xsnTestNetParams = xsncoinNetParams{
++	Params:   &xsncoinCfg.TestNet3Params,
++	rpcPort:  "20000",
++	CoinType: keychain.CoinTypeStakenet,
++}
++
++// xsnMainNetParams contains the parameters specific to the current
++// Stakenet mainnet.
++var xsnMainNetParams = xsncoinNetParams{
++	Params:   &xsncoinCfg.MainNetParams,
++	rpcPort:  "51475",
++	CoinType: keychain.CoinTypeStakenet,
++}
++
++// xsnRegTestNetParams contains parameters specific to a local regtest network.
++var xsnRegTestNetParams = xsncoinNetParams{
++	Params:   &xsncoinCfg.RegressionNetParams,
++	rpcPort:  "18334",
++	CoinType: keychain.CoinTypeStakenet,
++}
++
+ // applyLitecoinParams applies the relevant chain configuration parameters that
+ // differ for litecoin to the chain parameters typed for btcsuite derivation.
+ // This function is used in place of using something like interface{} to
+@@ -118,6 +148,47 @@ func applyLitecoinParams(params *bitcoinNetParams, litecoinParams *litecoinNetPa
+ 	params.CoinType = litecoinParams.CoinType
+ }
+ 
++// applyStakenetParams applies the relevant chain configuration parameters that
++// differ for xsncoin to the chain parameters typed for btcsuite derivation.
++// This function is used in place of using something like interface{} to
++// abstract over _which_ chain (or fork) the parameters are for.
++func applyStakenetParams(params *bitcoinNetParams, xsnParams *xsncoinNetParams) {
++	params.Name = xsnParams.Name
++	params.Net = bitcoinWire.BitcoinNet(xsnParams.Net)
++	params.DefaultPort = xsnParams.DefaultPort
++	params.CoinbaseMaturity = xsnParams.CoinbaseMaturity
++
++	copy(params.GenesisHash[:], xsnParams.GenesisHash[:])
++
++	// Address encoding magics
++	params.PubKeyHashAddrID = xsnParams.PubKeyHashAddrID
++	params.ScriptHashAddrID = xsnParams.ScriptHashAddrID
++	params.PrivateKeyID = xsnParams.PrivateKeyID
++	params.WitnessPubKeyHashAddrID = xsnParams.WitnessPubKeyHashAddrID
++	params.WitnessScriptHashAddrID = xsnParams.WitnessScriptHashAddrID
++	params.Bech32HRPSegwit = xsnParams.Bech32HRPSegwit
++
++	copy(params.HDPrivateKeyID[:], xsnParams.HDPrivateKeyID[:])
++	copy(params.HDPublicKeyID[:], xsnParams.HDPublicKeyID[:])
++
++	params.HDCoinType = xsnParams.HDCoinType
++
++	checkPoints := make([]chaincfg.Checkpoint, len(xsnParams.Checkpoints))
++	for i := 0; i < len(xsnParams.Checkpoints); i++ {
++		var chainHash chainhash.Hash
++		copy(chainHash[:], xsnParams.Checkpoints[i].Hash[:])
++
++		checkPoints[i] = chaincfg.Checkpoint{
++			Height: xsnParams.Checkpoints[i].Height,
++			Hash:   &chainHash,
++		}
++	}
++	params.Checkpoints = checkPoints
++
++	params.rpcPort = xsnParams.rpcPort
++	params.CoinType = xsnParams.CoinType
++}
++
+ // isTestnet tests if the given params correspond to a testnet
+ // parameter configuration.
+ func isTestnet(params *bitcoinNetParams) bool {
+diff --git a/chainregistry.go b/chainregistry.go
+index 11aa84e..5acb73b 100644
+--- a/chainregistry.go
++++ b/chainregistry.go
+@@ -77,6 +77,9 @@ const (
+ 
+ 	// litecoinChain is Litecoin's testnet chain.
+ 	litecoinChain
++
++	// xsncoinChain is Stakenet's testnet chain.
++	xsncoinChain
+ )
+ 
+ // String returns a string representation of the target chainCode.
+@@ -86,6 +89,8 @@ func (c chainCode) String() string {
+ 		return "bitcoin"
+ 	case litecoinChain:
+ 		return "litecoin"
++	case xsncoinChain:
++		return "xsncoin"
+ 	default:
+ 		return "kekcoin"
+ 	}
+@@ -130,6 +135,12 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 	ltndLog.Infof("Primary chain is set to: %v",
+ 		registeredChains.PrimaryChain())
+ 
++	if registeredChains.PrimaryChain() == xsncoinChain {
++		homeChainConfig = cfg.Xsncoin
++	}
++	ltndLog.Infof("Primary chain is set to: %v",
++		registeredChains.PrimaryChain())
++
+ 	cc := &chainControl{}
+ 
+ 	switch registeredChains.PrimaryChain() {
+@@ -153,6 +164,16 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 		cc.feeEstimator = lnwallet.StaticFeeEstimator{
+ 			FeeRate: defaultLitecoinStaticFeeRate,
+ 		}
++	case xsncoinChain:
++		cc.routingPolicy = htlcswitch.ForwardingPolicy{
++			MinHTLC:       cfg.Xsncoin.MinHTLC,
++			BaseFee:       cfg.Xsncoin.BaseFee,
++			FeeRate:       cfg.Xsncoin.FeeRate,
++			TimeLockDelta: cfg.Xsncoin.TimeLockDelta,
++		}
++		cc.feeEstimator = lnwallet.StaticFeeEstimator{
++			FeeRate: defaultBitcoinStaticFeeRate,
++		}
+ 	default:
+ 		return nil, nil, fmt.Errorf("Default routing policy for "+
+ 			"chain %v is unknown", registeredChains.PrimaryChain())
+@@ -259,13 +280,15 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 			svc.Stop()
+ 			nodeDatabase.Close()
+ 		}
+-	case "bitcoind", "litecoind":
++	case "bitcoind", "litecoind", "xsnd":
+ 		var bitcoindMode *bitcoindConfig
+ 		switch {
+ 		case cfg.Bitcoin.Active:
+ 			bitcoindMode = cfg.BitcoindMode
+ 		case cfg.Litecoin.Active:
+ 			bitcoindMode = cfg.LitecoindMode
++		case cfg.Xsncoin.Active:
++			bitcoindMode = cfg.XsndMode
+ 		}
+ 		// Otherwise, we'll be speaking directly via RPC and ZMQ to a
+ 		// bitcoind node. If the specified host for the btcd/ltcd RPC
+@@ -375,6 +398,23 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 			if err := cc.feeEstimator.Start(); err != nil {
+ 				return nil, nil, err
+ 			}
++		} else if cfg.Xsncoin.Active && !cfg.Xsncoin.RegTest {
++			ltndLog.Infof("Initializing xsnd backed fee estimator")
++
++			// Finally, we'll re-initialize the fee estimator, as
++			// if we're using xsnd as a backend, then we can
++			// use live fee estimates, rather than a statically
++			// coded value.
++			fallBackFeeRate := lnwallet.SatPerVByte(25)
++			cc.feeEstimator, err = lnwallet.NewBitcoindFeeEstimator(
++				*rpcConfig, fallBackFeeRate,
++			)
++			if err != nil {
++				return nil, nil, err
++			}
++			if err := cc.feeEstimator.Start(); err != nil {
++				return nil, nil, err
++			}
+ 		}
+ 	case "btcd", "ltcd":
+ 		// Otherwise, we'll be speaking directly via RPC to a node.
+@@ -409,7 +449,6 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 				return nil, nil, err
+ 			}
+ 		}
+-
+ 		// If the specified host for the btcd/ltcd RPC server already
+ 		// has a port specified, then we use that directly. Otherwise,
+ 		// we assume the default port according to the selected chain
+@@ -421,7 +460,6 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 			btcdHost = fmt.Sprintf("%v:%v", btcdMode.RPCHost,
+ 				activeNetParams.rpcPort)
+ 		}
+-
+ 		btcdUser := btcdMode.RPCUser
+ 		btcdPass := btcdMode.RPCPass
+ 		rpcConfig := &rpcclient.ConnConfig{
+@@ -438,7 +476,6 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 		if err != nil {
+ 			return nil, nil, err
+ 		}
+-
+ 		// Finally, we'll create an instance of the default chain view to be
+ 		// used within the routing layer.
+ 		cc.chainView, err = chainview.NewBtcdFilteredChainView(*rpcConfig)
+@@ -454,7 +491,6 @@ func newChainControlFromConfig(cfg *config, chanDB *channeldb.DB,
+ 		if err != nil {
+ 			return nil, nil, err
+ 		}
+-
+ 		walletConfig.ChainSource = chainRPC
+ 
+ 		// If we're not in simnet or regtest mode, then we'll attempt
+@@ -569,6 +605,13 @@ var (
+ 		0x59, 0x40, 0xfd, 0x1f, 0xe3, 0x65, 0xa7, 0x12,
+ 	})
+ 
++	xsncoinTestnetGenesis = chainhash.Hash([chainhash.HashSize]byte{
++        	0x63, 0x07, 0xe9, 0x9e, 0x74, 0xbb, 0x85, 0x9a,
++	        0x33, 0xdc, 0xf0, 0x5a, 0xd6, 0xc6, 0x6e, 0x4b,
++        	0xfe, 0x71, 0xa5, 0xc5, 0x02, 0xce, 0xfd, 0x41,
++        	0x4e, 0xcd, 0x31, 0x4b, 0x25, 0x05, 0x00, 0x00,
++	})
++
+ 	// chainMap is a simple index that maps a chain's genesis hash to the
+ 	// chainCode enum for that chain.
+ 	chainMap = map[chainhash.Hash]chainCode{
+@@ -591,7 +634,7 @@ var (
+ 	//
+ 	// TODO(roasbeef): extend and collapse these and chainparams.go into
+ 	// struct like chaincfg.Params
+-	chainDNSSeeds = map[chainhash.Hash][][2]string{
++	chainDNSSeeds = map[chainhash.Hash][][3]string{
+ 		bitcoinMainnetGenesis: {
+ 			{
+ 				"nodes.lightning.directory",
+diff --git a/config.go b/config.go
+index 5002977..0612da2 100644
+--- a/config.go
++++ b/config.go
+@@ -100,7 +100,7 @@ type chainConfig struct {
+ 	Active   bool   `long:"active" description:"If the chain should be active or not."`
+ 	ChainDir string `long:"chaindir" description:"The directory to store the chain's data within."`
+ 
+-	Node string `long:"node" description:"The blockchain interface to use." choice:"btcd" choice:"bitcoind" choice:"neutrino" choice:"ltcd" choice:"litecoind"`
++	Node string `long:"node" description:"The blockchain interface to use." choice:"xsnd" choice:"btcd" choice:"bitcoind" choice:"neutrino" choice:"ltcd" choice:"litecoind"`
+ 
+ 	MainNet  bool `long:"mainnet" description:"Use the main network"`
+ 	TestNet3 bool `long:"testnet" description:"Use the test network"`
+@@ -216,6 +216,9 @@ type config struct {
+ 	LtcdMode      *btcdConfig     `group:"ltcd" namespace:"ltcd"`
+ 	LitecoindMode *bitcoindConfig `group:"litecoind" namespace:"litecoind"`
+ 
++	Xsncoin      *chainConfig    `group:"Xsncoin" namespace:"xsncoin"`
++	XsndMode 	 *bitcoindConfig `group:"xsnd" namespace:"xsnd"`
++
+ 	Autopilot *autoPilotConfig `group:"Autopilot" namespace:"autopilot"`
+ 
+ 	Tor *torConfig `group:"Tor" namespace:"tor"`
+@@ -291,6 +294,17 @@ func loadConfig() (*config, error) {
+ 			Dir:     defaultLitecoindDir,
+ 			RPCHost: defaultRPCHost,
+ 		},
++		Xsncoin: &chainConfig{
++			MinHTLC:       defaultBitcoinMinHTLCMSat,
++			BaseFee:       defaultBitcoinBaseFeeMSat,
++			FeeRate:       defaultBitcoinFeeRate,
++			TimeLockDelta: defaultBitcoinTimeLockDelta,
++			Node:          "xsnd",
++		},
++		XsndMode: &bitcoindConfig{
++			Dir:     defaultBitcoindDir,
++			RPCHost: defaultRPCHost,
++		},
+ 		MaxPendingChannels: defaultMaxPendingChannels,
+ 		NoEncryptWallet:    defaultNoEncryptWallet,
+ 		Autopilot: &autoPilotConfig{
+@@ -396,6 +410,7 @@ func loadConfig() (*config, error) {
+ 	cfg.LtcdMode.Dir = cleanAndExpandPath(cfg.LtcdMode.Dir)
+ 	cfg.BitcoindMode.Dir = cleanAndExpandPath(cfg.BitcoindMode.Dir)
+ 	cfg.LitecoindMode.Dir = cleanAndExpandPath(cfg.LitecoindMode.Dir)
++	cfg.XsndMode.Dir = cleanAndExpandPath(cfg.XsndMode.Dir)
+ 	cfg.Tor.V2PrivateKeyPath = cleanAndExpandPath(cfg.Tor.V2PrivateKeyPath)
+ 
+ 	// Ensure that the user didn't attempt to specify negative values for
+@@ -509,7 +524,7 @@ func loadConfig() (*config, error) {
+ 
+ 	// Either Bitcoin must be active, or Litecoin must be active.
+ 	// Otherwise, we don't know which chain we're on.
+-	case !cfg.Bitcoin.Active && !cfg.Litecoin.Active:
++	case !cfg.Bitcoin.Active && !cfg.Litecoin.Active && !cfg.Xsncoin.Active:
+ 		return nil, fmt.Errorf("%s: either bitcoin.active or "+
+ 			"litecoin.active must be set to 1 (true)", funcName)
+ 
+@@ -705,6 +720,101 @@ func loadConfig() (*config, error) {
+ 		// Finally we'll register the bitcoin chain as our current
+ 		// primary chain.
+ 		registeredChains.RegisterPrimaryChain(bitcoinChain)
++
++	case cfg.Xsncoin.Active:
++		// Multiple networks can't be selected simultaneously.  Count
++		// number of network flags passed; assign active network params
++		// while we're at it.
++		numNets := 0
++		var xsnParams xsncoinNetParams
++		if cfg.Xsncoin.MainNet {
++			numNets++
++			xsnParams = xsnMainNetParams
++		}
++		if cfg.Xsncoin.TestNet3 {
++			numNets++
++			xsnParams = xsnTestNetParams
++		}
++		if cfg.Xsncoin.RegTest {
++			numNets++
++			xsnParams = xsnRegTestNetParams
++		}
++
++		if numNets > 1 {
++			str := "%s: The mainnet, testnet, regtest, and " +
++				"simnet params can't be used together -- " +
++				"choose one of the four"
++			err := fmt.Errorf(str, funcName)
++			return nil, err
++		}
++
++		// The target network must be provided, otherwise, we won't
++		// know how to initialize the daemon.
++		if numNets == 0 {
++			str := "%s: either --bitcoin.mainnet, or " +
++				"bitcoin.testnet, bitcoin.simnet, or bitcoin.regtest " +
++				"must be specified"
++			err := fmt.Errorf(str, funcName)
++			return nil, err
++		}
++
++		// The litecoin chain is the current active chain. However
++		// throughout the codebase we required chaincfg.Params. So as a
++		// temporary hack, we'll mutate the default net params for
++		// bitcoin with the litecoin specific information.
++		applyStakenetParams(&activeNetParams, &xsnParams)
++
++		if cfg.Xsncoin.Node == "neutrino" && cfg.Xsncoin.MainNet {
++			str := "%s: neutrino isn't yet supported for " +
++				"bitcoin's mainnet"
++			err := fmt.Errorf(str, funcName)
++			return nil, err
++		}
++
++		if cfg.Xsncoin.TimeLockDelta < minTimeLockDelta {
++			return nil, fmt.Errorf("timelockdelta must be at least %v",
++				minTimeLockDelta)
++		}
++
++		switch cfg.Xsncoin.Node {
++		case "btcd":
++			err := parseRPCParams(
++				cfg.Xsncoin, cfg.BtcdMode, xsncoinChain, funcName,
++			)
++			if err != nil {
++				err := fmt.Errorf("unable to load RPC "+
++					"credentials for btcd: %v", err)
++				return nil, err
++			}
++		case "xsnd":
++			if cfg.Xsncoin.SimNet {
++				return nil, fmt.Errorf("%s: bitcoind does not "+
++					"support simnet", funcName)
++			}
++
++			err := parseRPCParams(
++				cfg.Xsncoin, cfg.XsndMode, xsncoinChain, funcName,
++			)
++			if err != nil {
++				err := fmt.Errorf("unable to load RPC "+
++					"credentials for xsnd: %v", err)
++				return nil, err
++			}
++		case "neutrino":
++			// No need to get RPC parameters.
++		default:
++			str := "%s: only btcd, bitcoind, and neutrino mode " +
++				"supported for bitcoin at this time"
++			return nil, fmt.Errorf(str, funcName)
++		}
++
++		cfg.Xsncoin.ChainDir = filepath.Join(cfg.DataDir,
++			defaultChainSubDirname,
++			xsncoinChain.String())
++
++		// Finally we'll register the bitcoin chain as our current
++		// primary chain.
++		registeredChains.RegisterPrimaryChain(xsncoinChain)
+ 	}
+ 
+ 	// Ensure that the user didn't attempt to specify negative values for
+@@ -1089,6 +1199,8 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
+ 			daemonName = "bitcoind"
+ 		case litecoinChain:
+ 			daemonName = "litecoind"
++		case xsncoinChain:
++			daemonName = "xsnd"
+ 		}
+ 		// If only one or two of the parameters are set, we assume the
+ 		// user did that unintentionally.
+@@ -1105,6 +1217,9 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
+ 		case litecoinChain:
+ 			confDir = conf.Dir
+ 			confFile = "litecoin"
++		case xsncoinChain:
++			confDir = conf.Dir
++			confFile = "bitcoin"
+ 		}
+ 	}
+ 
+@@ -1130,7 +1245,7 @@ func parseRPCParams(cConfig *chainConfig, nodeConfig interface{}, net chainCode,
+ 				err)
+ 		}
+ 		nConf.RPCUser, nConf.RPCPass = rpcUser, rpcPass
+-	case "bitcoind", "litecoind":
++	case "bitcoind", "litecoind", "xsnd":
+ 		nConf := nodeConfig.(*bitcoindConfig)
+ 		rpcUser, rpcPass, zmqPath, err := extractBitcoindRPCParams(confFile)
+ 		if err != nil {
+diff --git a/discovery/bootstrapper.go b/discovery/bootstrapper.go
+index 35782d6..cc4346d 100644
+--- a/discovery/bootstrapper.go
++++ b/discovery/bootstrapper.go
+@@ -278,7 +278,7 @@ type DNSSeedBootstrapper struct {
+ 	// in the tuple is a special A record that we'll query in order to
+ 	// receive the IP address of the current authoritative DNS server for
+ 	// the network seed.
+-	dnsSeeds [][2]string
++	dnsSeeds [][3]string
+ 	net      tor.Net
+ }
+ 
+@@ -293,7 +293,7 @@ var _ NetworkPeerBootstrapper = (*ChannelGraphBootstrapper)(nil)
+ // used as a fallback for manual TCP resolution in the case of an error
+ // receiving the UDP response. The second host should return a single A record
+ // with the IP address of the authoritative name server.
+-func NewDNSSeedBootstrapper(seeds [][2]string, net tor.Net) NetworkPeerBootstrapper {
++func NewDNSSeedBootstrapper(seeds [][3]string, net tor.Net) NetworkPeerBootstrapper {
+ 	return &DNSSeedBootstrapper{dnsSeeds: seeds, net: net}
+ }
+ 
+diff --git a/keychain/btcwallet.go b/keychain/btcwallet.go
+index e0f5220..3c23799 100644
+--- a/keychain/btcwallet.go
++++ b/keychain/btcwallet.go
+@@ -22,6 +22,10 @@ const (
+ 	// CoinTypeLitecoin specifies the BIP44 coin type for Litecoin key
+ 	// derivation.
+ 	CoinTypeLitecoin = 2
++
++	// CoinTypeStakenet specifies the BIP44 coin type for Stakenet key
++        // derivation.
++        CoinTypeStakenet = 3
+ )
+ 
+ var (
+diff --git a/lnd.go b/lnd.go
+index ac3df4b..c8f98d9 100644
+--- a/lnd.go
++++ b/lnd.go
+@@ -114,16 +114,16 @@ func lndMain() error {
+ 
+ 	var network string
+ 	switch {
+-	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3:
++	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3 || cfg.Xsncoin.TestNet3:
+ 		network = "testnet"
+ 
+-	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet:
++	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet ||  cfg.Xsncoin.MainNet:
+ 		network = "mainnet"
+ 
+ 	case cfg.Bitcoin.SimNet:
+ 		network = "simnet"
+ 
+-	case cfg.Bitcoin.RegTest:
++	case cfg.Bitcoin.RegTest ||  cfg.Xsncoin.RegTest:
+ 		network = "regtest"
+ 	}
+ 
+@@ -268,6 +268,7 @@ func lndMain() error {
+ 	// With the information parsed from the configuration, create valid
+ 	// instances of the pertinent interfaces required to operate the
+ 	// Lightning Network Daemon.
++
+ 	activeChainControl, chainCleanUp, err := newChainControlFromConfig(
+ 		cfg, chanDB, privateWalletPw, publicWalletPw, birthday,
+ 		recoveryWindow, unlockedWallet,
+@@ -703,6 +704,10 @@ func waitForWalletPassword(grpcEndpoints, restEndpoints []net.Addr,
+ 		chainConfig = cfg.Litecoin
+ 	}
+ 
++	if registeredChains.PrimaryChain() == xsncoinChain {
++		chainConfig = cfg.Xsncoin
++	}
++
+ 	// The macaroon files are passed to the wallet unlocker since they are
+ 	// also encrypted with the wallet's password. These files will be
+ 	// deleted within it and recreated when successfully changing the
+@@ -818,6 +823,7 @@ func waitForWalletPassword(grpcEndpoints, restEndpoints []net.Addr,
+ 		netDir := btcwallet.NetworkDir(
+ 			chainConfig.ChainDir, activeNetParams.Params,
+ 		)
++
+ 		loader := wallet.NewLoader(
+ 			activeNetParams.Params, netDir, uint32(recoveryWindow),
+ 		)
+diff --git a/rpcserver.go b/rpcserver.go
+index 74ee827..4b4897d 100644
+--- a/rpcserver.go
++++ b/rpcserver.go
+@@ -2552,6 +2552,9 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
+ 		if registeredChains.PrimaryChain() == litecoinChain {
+ 			defaultDelta = cfg.Litecoin.TimeLockDelta
+ 		}
++		if registeredChains.PrimaryChain() == xsncoinChain {
++			defaultDelta = cfg.Xsncoin.TimeLockDelta
++		}
+ 		options = append(options, zpay32.CLTVExpiry(uint64(defaultDelta)))
+ 	}
+ 
+diff --git a/server.go b/server.go
+index 233fe2d..76731a3 100644
+--- a/server.go
++++ b/server.go
+@@ -957,7 +957,7 @@ func (s *server) Start() error {
+ 	// the set of active bootstrappers, and launch a dedicated goroutine to
+ 	// maintain a set of persistent connections.
+ 	if !cfg.NoNetBootstrap && !(cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet) &&
+-		!(cfg.Bitcoin.RegTest || cfg.Litecoin.RegTest) {
++		!(cfg.Bitcoin.RegTest || cfg.Litecoin.RegTest || cfg.Xsncoin.RegTest) {
+ 
+ 		bootstrappers, err := initNetworkBootstrappers(s)
+ 		if err != nil {
