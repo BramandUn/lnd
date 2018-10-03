@@ -31,7 +31,7 @@ Developing on `lnd` can be quite complex since there are many more moving piec
 
 Let’s start by running `xsnd`, if you don’t have it up already. Open up a new terminal window, ensure you have your $GOPATH set, and run:
 
-`./xsnd –testnet --rpcuser=rpcuser –rpcpass=rpcpassword –txindex --zmqpubrawblock=tcp://127.0.0.1:28332`
+`./xsnd –testnet --rpcuser=rpcuser –rpcpass=rpcpassword –txindex --zmqpubrawblock=tcp://127.0.0.1:28332 --zmqpubrawtx=tcp://127.0.0.1:28333`
 
 Breaking down the components:
 
@@ -41,7 +41,7 @@ Breaking down the components:
 
 * `--rpcuser` and `rpcpass` sets a default password for authenticating to the `xsnd` instance.
 
-* `--zmqpubrawblock` , since `lnd` uses `ZeroMQ` to interface with `xsnd`, your `xsnd` installation must be compiled with ZMQ.  Note that if you installed `xsnd` from source and ZMQ was not present, then ZMQ support will be disabled,      and `lnd` will quit on a connection refused error. Configure the `xsnd` instance for ZMQ with `--zmqpubrawblock`. This options must use unique address in order to provide a reliable delivery of notifications (e.g.  --zmqpubrawblock=tcp://127.0.0.1:28332).
+* `--zmqpubrawblock` and `--zmqpubrawtx` , since `lnd` uses `ZeroMQ` to interface with `xsnd`, your `xsnd` installation must be compiled with ZMQ.  Note that if you installed `xsnd` from source and ZMQ was not present, then ZMQ support will be disabled,      and `lnd` will quit on a connection refused error. Configure the `xsnd` instance for ZMQ with `--zmqpubrawblock` and `--zmqpubrawtx`. This options must use unique address in order to provide a reliable delivery of notifications (e.g.  --zmqpubrawblock=tcp://127.0.0.1:28332 --zmqpubrawtx=tcp://127.0.0.1:28333).
 
 ## Starting lnd (Alice’s node)
 Now, let’s set up the two `lnd` nodes. To keep things as clean and separate as possible, open up a new terminal window, ensure you have $GOPATH set and $GOPATH/bin in your PATH, and create a new directory under $GOPATH called dev that will represent our development space. We will create separate folders to store the state for alice, and bob, and run all of our `lnd` nodes on different localhostports.
@@ -59,7 +59,7 @@ Start up the Alice node from within the alice directory:
 ```
 cd $GOPATH/dev/alice
 
-alice$ ./lnd --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword --xsnd.zmqpath=tcp://127.0.0.1:28332
+alice$ ./lnd --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword --xsnd.zmqpubrawblock=tcp://127.0.0.1:28332 --xsnd.zmqpubrawtx=tcp://127.0.0.1:28333
 ```
 The Alice node should now be running and displaying output ending with a line beginning with “Waiting for wallet encryption password.”
 
@@ -70,7 +70,8 @@ Breaking down the components:
 * `--xsncoin.active`: Specifies that xsn is active. Can also include --litecoin.active to activate Litecoin, --bitcoind.active for bitcoin.
 * `--xsncoin.node=xsnd`: Use the `xsnd` full node to interface with the blockchain. 
 * `--xsnd.rpcuser` and `--xsnd.rpcpass`: The username and password for the xnsd instance.
-* `--xsnd.zmqpath`: The path to the ZMQ socket providing raw blocks.
+* `--xsnd.zmqpubrawblock`: The address listening for ZMQ connections to deliver raw block notifications.
+* `--xsnd.zmqpubrawtx`: The address listening for ZMQ connections to deliver raw transaction notifications.
 * `--nobootstrap`: disable automatic network bootstrapping.
 
 ## Starting second(Bob’s) node
@@ -84,11 +85,11 @@ cd $GOPATH/dev/bob
 
 # running from same machine:
 
-bob$ ./lnd --rpclisten=localhost:10002 --listen=localhost:10012 --restlisten=localhost:8002 --datadir=data --logdir=log --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword –xsnd.zmqpath=tcp://127.0.0.1:28332
+bob$ ./lnd --rpclisten=localhost:10002 --listen=localhost:10012 --restlisten=localhost:8002 --datadir=data --logdir=log --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword --xsnd.zmqpubrawblock=tcp://127.0.0.1:28332 --xsnd.zmqpubrawtx=tcp://127.0.0.1:28333
 
 # running from another machine (just the same as with first node):
 
-bob$ ./lnd --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword –xsnd.zmqpath=tcp://127.0.0.1:28332
+bob$ ./lnd --nobootstrap --xsncoin.active --xsncoin.testnet --debuglevel=debug --xsncoin.node=xsnd --xsnd.rpcuser=rpcuser --xsnd.rpcpass=rpcpassword --xsnd.zmqpubrawblock=tcp://127.0.0.1:28332 --xsnd.zmqpubrawtx=tcp://127.0.0.1:28333
 ```
 
 Breaking down additional options:
