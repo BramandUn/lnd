@@ -92,7 +92,8 @@ func (m *mockNotfier) RegisterConfirmationsNtfn(txid *chainhash.Hash,
 		Confirmed: m.confChannel,
 	}, nil
 }
-func (m *mockNotfier) RegisterBlockEpochNtfn() (*chainntnfs.BlockEpochEvent, error) {
+func (m *mockNotfier) RegisterBlockEpochNtfn(
+	bestBlock *chainntnfs.BlockEpoch) (*chainntnfs.BlockEpochEvent, error) {
 	return &chainntnfs.BlockEpochEvent{
 		Epochs: make(chan *chainntnfs.BlockEpoch),
 		Cancel: func() {},
@@ -221,8 +222,8 @@ func (m *mockWalletController) NewAddress(addrType lnwallet.AddressType,
 		m.rootKey.PubKey().SerializeCompressed(), &chaincfg.MainNetParams)
 	return addr, nil
 }
-func (*mockWalletController) GetPrivKey(a btcutil.Address) (*btcec.PrivateKey, error) {
-	return nil, nil
+func (*mockWalletController) IsOurAddress(a btcutil.Address) bool {
+	return false
 }
 
 func (*mockWalletController) SendOutputs(outputs []*wire.TxOut,
